@@ -1,0 +1,105 @@
+trigger: none # intended to run manually
+name: Deploy Infrastructure via Terraform
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: 'bootstrap-state-variable-grp'
+
+stages:
+- stage: bootstrap_state
+  displayName: 'Bootstrap TF State'
+  jobs:
+  - job: tf_bootstrap
+    steps:
+    - task: AzureResourceManagerTemplateDeployment@3
+      inputs:
+        deploymentScope: 'Subscription'
+        azureResourceManagerConnection: '$(azureServiceConnection)'
+        subscriptionId: '$(targetSubscriptionId)'
+        location: '$(location)'
+        csmFile: '$(Build.SourcesDirectory)/bicep/main.bicep'
+        deploymentOutputs: 'deploymentOutputs'
+        overrideParameters: '-prefix $(prefix) -location $(location)'
+    - script: |
+        # this script takes output from ARM deployment and makes it available to steps further down the pipeline
+        echo "##vso[task.setvariable variable=resourceGroupName;isOutput=true]`echo $DEPLOYMENT_OUTPUT | jq -r '.resourceGroupName.value'`"
+        echo "##vso[task.setvariable variable=storageAccountName;isOutput=true]`echo $DEPLOYMENT_OUTPUT | jq -r '.storageAccountName.value'`"
+        echo "##vso[task.setvariable variable=containerName;isOutput=true]`echo $DEPLOYMENT_OUTPUT | jq -r '.containerName.value'`"
+        echo "##vso[task.setvariable variable=storageAccessKey;isOutput=true;isSecret=true]`echo $DEPLOYMENT_OUTPUT | jq -r '.storageAccessKey.value'`"
+      # https://docs.microsoft.com/en-us/azure/devops/pipelines/process/variables?view=azure-devops&tabs=yaml%2Cbatch#share-variables-across-pipelines
+      name: armOutputs # giving name to this task is extremely important as we will use it to reference the variables from later stages      
+      env:
+        DEPLOYMENT_OUTPUT: $(deploymentOutputs)
+
+- stage: run_tf_plan # Build stage
+  displayName: 'TF Plan'
+  jobs:
+  - job: tf_plan
+    variables:
+      # to be able to reference outputs from earlier stage, we start hierarchy from stageDependencies and address job outputs by full name: <stage_id>.<job_id>.outputs
+      - name: resourceGroupName
+        value: $[ stageDependencies.bootstrap_state.tf_bootstrap.outputs['armOutputs.resourceGroupName'] ]
+      - name: storageAccountName
+        value: $[ stageDependencies.bootstrap_state.tf_bootstrap.outputs['armOutputs.storageAccountName'] ]
+      - name: containerName
+        value: $[ stageDependencies.bootstrap_state.tf_bootstrap.outputs['armOutputs.containerName'] ]
+      - name: storageAccessKey
+        value: $[ stageDependencies.bootstrap_state.tf_bootstrap.outputs['armOutputs.storageAccessKey'] ]
+    steps:              
+      # check out TF code from git
+      - checkout: self
+        persistCredentials: true
+      # init terraform and point the backend to correct storage account
+      - task: TerraformTaskV2@2 # https://github.com/microsoft/azure-pipelines-extensions/blob/master/Extensions/Terraform/Src/Tasks/TerraformTask/TerraformTaskV2/task.json
+        displayName: terraform init
+        inputs:
+          workingDirectory: '$(System.DefaultWorkingDirectory)/tf'
+          backendServiceArm: $(azureServiceConnection)
+          backendAzureRmResourceGroupName: $(resourceGroupName)
+          backendAzureRmStorageAccountName: $(storageAccountName)
+          backendAzureRmContainerName: $(containerName)
+          backendAzureRmKey: '$(prefix)/terraform.tfstate'
+        env:
+          ARM_ACCESS_KEY: $(storageAccessKey)
+      # run terraform plan and store it as a file so we can package it
+      - task: TerraformTaskV2@2
+        displayName: terraform plan
+        inputs:
+          workingDirectory: '$(System.DefaultWorkingDirectory)/tf'
+          environmentServiceNameAzureRM: $(azureServiceConnection)
+          command: 'plan'
+          # feed tfvars file and set variables for azure backend (see TF files for usage)
+          commandOptions: '-input=false -var-file=terraform.tfvars -var="prefix=$(prefix)" -var="location=$(location)" -var="subscription_id=$(targetSubscriptionId)" -out=$(prefix)-plan.tfplan'
+        env:
+          ARM_ACCESS_KEY: $(storageAccessKey)
+      # package workspace into an artifact so we can publish it
+      - task: ArchiveFiles@2
+        inputs:
+          displayName: 'Create Plan Artifact'
+          rootFolderOrFile: '$(System.DefaultWorkingDirectory)/tf'
+          includeRootFolder: false                
+          archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+          replaceExistingArchive: true
+      # publish artifact to ADO
+      - task: PublishBuildArtifacts@1
+        inputs:
+          displayName: 'Publish Plan Artifact'
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+          ArtifactName: '$(Build.BuildId)-tfplan'
+          publishLocation: 'Container'          
+
+# Deploy Dev
+- template: deploy-tf-template.yml
+  parameters:
+    azureServiceConnection: $(azureServiceConnection)
+    prefix: $(prefix)
+    environment: 'dev'
+
+# Deploy Prod
+- template: deploy-tf-template.yml
+  parameters:
+    azureServiceConnection: $(azureServiceConnection)
+    prefix: $(prefix)
+    environment: 'prod'    

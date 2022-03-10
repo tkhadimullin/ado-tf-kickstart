@@ -1,0 +1,36 @@
+parameters:
+  azureServiceConnection: 'service_connection_name'
+  prefix: 'project_prefix_for_identification'
+  environment: 'deployment_environment'
+
+- stage: run_tf_apply # Deploy stage
+  dependsOn: 
+    - bootstrap_state # adding extra dependencies so we can access armOutputs from earlier stages
+    - run_tf_plan # by default next stage would have depended on the previous, but we broke that chain by depending on earlier stages
+  displayName: 'TF Apply on ${{ environment }}'
+  jobs:  
+  - deployment: tf_apply
+    environment: '${{ environment }}' # required for deployment jobs. will need to authorise the pipeline to use it at first run
+    strategy:
+        runOnce:
+          deploy:
+            steps:
+            # grab published artifact
+            - task: DownloadBuildArtifacts@0
+              inputs:
+                artifactName: '$(Build.BuildId)-tfplan'
+                displayName: 'Download Plan Artifact'
+            # unpack the archive, we should end up with all necessary files in root of working directory
+            - task: ExtractFiles@1
+              inputs:
+                archiveFilePatterns: '$(System.ArtifactsDirectory)/$(Build.BuildId)-tfplan/$(Build.BuildId).zip'
+                destinationFolder: '$(System.DefaultWorkingDirectory)/'
+                cleanDestinationFolder: false
+                displayName: 'Extract Terraform Plan Artifact'
+            - task: TerraformTaskV2@2
+              displayName: terraform apply
+              inputs:
+                workingDirectory: $(System.DefaultWorkingDirectory)
+                command: 'apply'
+                commandOptions: '-auto-approve -input=false ${{ prefix }}-plan.tfplan'
+                environmentServiceNameAzureRM: '${{ azureServiceConnection }}'
