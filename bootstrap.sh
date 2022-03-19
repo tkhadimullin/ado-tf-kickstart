@@ -31,12 +31,12 @@ then
 fi
 if [[ -z ${SERVICE_PRINCIPAL_SECRET} ]];
 then
-    read -rp "Specify target Azure Subscription name:" -s SERVICE_PRINCIPAL_SECRET
+    read -rp "Specify Azure Service Principal Secret:" -s SERVICE_PRINCIPAL_SECRET
     echo ""
 fi
 if [[ -z ${PROJECT_PREFIX} ]];
 then
-    read -rp "Specify project prefix for resource identification:" -s PROJECT_PREFIX
+    read -rp "Specify project prefix for resource identification:" PROJECT_PREFIX
 fi
 
 

@@ -12,7 +12,7 @@ stages:
   displayName: 'Bootstrap TF State'
   jobs:
   - job: tf_bootstrap
-    steps:
+    steps:    
     - task: AzureResourceManagerTemplateDeployment@3
       inputs:
         deploymentScope: 'Subscription'
@@ -48,6 +48,9 @@ stages:
       - name: storageAccessKey
         value: $[ stageDependencies.bootstrap_state.tf_bootstrap.outputs['armOutputs.storageAccessKey'] ]
     steps:              
+      - task: TerraformInstaller@0
+        inputs:
+          terraformVersion: '1.1.7'
       # check out TF code from git
       - checkout: self
         persistCredentials: true

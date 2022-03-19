@@ -3,18 +3,22 @@ parameters:
   prefix: 'project_prefix_for_identification'
   environment: 'deployment_environment'
 
-- stage: run_tf_apply # Deploy stage
+stages:
+- stage: run_tf_apply_${{ parameters.environment }} # Deploy stage
   dependsOn: 
     - bootstrap_state # adding extra dependencies so we can access armOutputs from earlier stages
     - run_tf_plan # by default next stage would have depended on the previous, but we broke that chain by depending on earlier stages
-  displayName: 'TF Apply on ${{ environment }}'
+  displayName: 'TF Apply on ${{ parameters.environment }}'
   jobs:  
   - deployment: tf_apply
-    environment: '${{ environment }}' # required for deployment jobs. will need to authorise the pipeline to use it at first run
+    environment: '${{ parameters.environment }}' # required for deployment jobs. will need to authorise the pipeline to use it at first run
     strategy:
         runOnce:
           deploy:
             steps:
+            - task: TerraformInstaller@0
+              inputs:
+                terraformVersion: '1.1.7'
             # grab published artifact
             - task: DownloadBuildArtifacts@0
               inputs:
@@ -32,5 +36,5 @@ parameters:
               inputs:
                 workingDirectory: $(System.DefaultWorkingDirectory)
                 command: 'apply'
-                commandOptions: '-auto-approve -input=false ${{ prefix }}-plan.tfplan'
-                environmentServiceNameAzureRM: '${{ azureServiceConnection }}'
+                commandOptions: '-auto-approve -input=false ${{ parameters.prefix }}-plan.tfplan'
+                environmentServiceNameAzureRM: '${{ parameters.azureServiceConnection }}'
